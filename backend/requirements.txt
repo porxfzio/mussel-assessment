@@ -1,0 +1,13 @@
+fastapi
+uvicorn[standard]
+python-multipart
+torch
+detectron2          # install via: pip install 'git+https://github.com/facebookresearch/detectron2.git'
+scikit-learn
+joblib
+pillow
+numpy
+supabase
+python-dotenv
+opencv-python-headless
+pandas

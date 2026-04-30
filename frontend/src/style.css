@@ -227,6 +227,107 @@ body {
   height: 100%;             /* ← add this */
   box-sizing: border-box;   /* ← add this */
 }
+
+/* ── Scanning animation overlay ── */
+.scanning-wrapper {
+  position: relative;
+  width: 100%;
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.scanning-wrapper img {
+  width: 100%;
+  display: block;
+  border-radius: 8px;
+}
+
+.scan-line {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 3px;
+  background: linear-gradient(90deg, transparent, #4a8c6f, #7ed4b0, #4a8c6f, transparent);
+  box-shadow: 0 0 10px #4a8c6f, 0 0 20px #7ed4b0;
+  animation: scanDown 1.8s ease-in-out infinite;
+  z-index: 10;
+}
+
+.scan-overlay {
+  position: absolute;
+  inset: 0;
+  background: repeating-linear-gradient(
+    0deg,
+    transparent,
+    transparent 2px,
+    rgba(74, 140, 111, 0.04) 2px,
+    rgba(74, 140, 111, 0.04) 4px
+  );
+  animation: pulseOverlay 1.8s ease-in-out infinite;
+  z-index: 9;
+  border-radius: 8px;
+}
+
+.scan-corner {
+  position: absolute;
+  width: 16px;
+  height: 16px;
+  z-index: 11;
+}
+.scan-corner.tl { top: 8px;    left: 8px;    border-top: 2px solid #4a8c6f;  border-left: 2px solid #4a8c6f; }
+.scan-corner.tr { top: 8px;    right: 8px;   border-top: 2px solid #4a8c6f;  border-right: 2px solid #4a8c6f; }
+.scan-corner.bl { bottom: 8px; left: 8px;    border-bottom: 2px solid #4a8c6f; border-left: 2px solid #4a8c6f; }
+.scan-corner.br { bottom: 8px; right: 8px;   border-bottom: 2px solid #4a8c6f; border-right: 2px solid #4a8c6f; }
+
+.scan-label {
+  position: absolute;
+  bottom: 10px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(0, 0, 0, 0.55);
+  color: #7ed4b0;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  padding: 4px 12px;
+  border-radius: 20px;
+  z-index: 12;
+  animation: blinkLabel 1.2s ease-in-out infinite;
+  white-space: nowrap;
+}
+
+.scanning-wrapper {
+  width: 100%;
+  height: 100%;
+  position: relative;
+  overflow: hidden;
+  border-radius: 8px;
+}
+
+.scanning-wrapper img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+@keyframes scanDown {
+  0%   { top: 0%; }
+  50%  { top: calc(100% - 3px); }
+  100% { top: 0%; }
+}
+
+@keyframes pulseOverlay {
+  0%, 100% { opacity: 0.4; }
+  50%       { opacity: 1;   }
+}
+
+@keyframes blinkLabel {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.4; }
+}
+
 /* ── Responsive ───────────────────────────────────────────────── */
 @media (max-width: 640px) {
   .result-two-col { grid-template-columns: 1fr; }

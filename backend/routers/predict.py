@@ -106,4 +106,7 @@ async def final_grade(session_id: str,
         "probabilities":         result["probabilities"],
         "features":              {**combined, **meat_feats},
         "overlay_meat":          result_meat["overlay_b64"],
+        "flesh_color_label":     meat_feats.get("flesh_color_label", "Unknown"),
+        "flesh_color_hex":       meat_feats.get("flesh_color_hex", "#cccccc"),
+        "flesh_color_grade":     meat_feats.get("flesh_color_grade", "B"),
     }

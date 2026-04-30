@@ -1,1 +1,53 @@
+# ── Model weights (too large for GitHub) ──────────────────────
 backend/weights/
+backend/model/
+*.pth
+*.pkl
+
+# ── Python virtual environment ────────────────────────────────
+venv/
+.venv/
+backend/venv/
+backend/.venv/
+env/
+
+# ── Environment variables (never commit) ──────────────────────
+.env
+.env.local
+.env.production
+.env.development
+
+# ── Python cache ──────────────────────────────────────────────
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.py[cod]
+*.egg-info/
+dist/
+build/
+*.so
+
+# ── Node / React ───────────────────────────────────────────────
+node_modules/
+frontend/dist/
+frontend/.vite/
+frontend/build/
+
+# ── VS Code ────────────────────────────────────────────────────
+.vscode/
+*.code-workspace
+
+# ── macOS ──────────────────────────────────────────────────────
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# ── Windows ────────────────────────────────────────────────────
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# ── Uploads / temp files ──────────────────────────────────────
+backend/uploads/
+*.log

@@ -24,7 +24,7 @@ def get_predictor():
 
     cfg = get_cfg()
     cfg.merge_from_file(model_zoo.get_config_file(
-        "COCO-InstanceSegmentation/mask_rcnn_R_50_FPN_3x.yaml"
+        "COCO-InstanceSegmentation/mask_rcnn_R_101_FPN_3x.yaml"
     ))
     cfg.MODEL.ANCHOR_GENERATOR.SIZES         = [[32], [64], [128], [256], [512]]
     cfg.MODEL.ANCHOR_GENERATOR.ASPECT_RATIOS = [[0.25, 0.5, 1.0, 2.0, 4.0]]

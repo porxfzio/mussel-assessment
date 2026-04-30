@@ -4,12 +4,7 @@ import "./style.css";
 const API_BASE = import.meta.env.VITE_API_URL || "http://localhost:8000";
 
 function getSessionId() {
-  let id = localStorage.getItem("mussel_session_id");
-  if (!id) {
-    id = crypto.randomUUID();
-    localStorage.setItem("mussel_session_id", id);
-  }
-  return id;
+  return crypto.randomUUID();
 }
 
 // ── Scanning animation overlay ──
@@ -91,7 +86,7 @@ export default function App() {
 
       {/* ── HEADER ── */}
       <div className="header">
-        <p className="eyebrow">Cavite State University · BSCS Thesis</p>
+        <p className="eyebrow">A Computer Vision-Based Quality Assessment <Mode></Mode></p>
         <h1 className="page-title">Green Mussel Quality Assessment</h1>
         <p className="page-sub">
           Upload shell exterior photos for an initial grade based on biofouling,
@@ -139,7 +134,9 @@ export default function App() {
           {/* Side A */}
           <div className="slot" onClick={() => !loadingInitial && document.getElementById("fileA").click()}>
             {loadingInitial && shellA ? (
-              <ScanningSlot file={shellA} label="Side A" />
+              <div style={{ width: "100%", aspectRatio: "1/1", overflow: "hidden", borderRadius: "8px" }}>
+                <ScanningSlot file={shellA} label="Side A" />
+              </div>
             ) : shellA ? (
               <div className="slot-filled">
                 <img src={URL.createObjectURL(shellA)} alt="Side A preview" />
@@ -157,7 +154,9 @@ export default function App() {
           {/* Side B */}
           <div className="slot" onClick={() => !loadingInitial && document.getElementById("fileB").click()}>
             {loadingInitial && shellB ? (
-              <ScanningSlot file={shellB} label="Side B" />
+              <div style={{ width: "100%", aspectRatio: "1/1", overflow: "hidden", borderRadius: "8px" }}>
+                <ScanningSlot file={shellB} label="Side B" />
+              </div>
             ) : shellB ? (
               <div className="slot-filled">
                 <img src={URL.createObjectURL(shellB)} alt="Side B preview" />
@@ -197,9 +196,22 @@ export default function App() {
                     Grade {initialResult.grade}
                   </span>
                   <p className="grade-title">Initial Grade</p>
-                  <p className="grade-desc">
-                    Biofouling coverage: {(initialResult.features.bio_coverage_pct).toFixed(1)}%
-                  </p>
+                    <p className="grade-desc">
+                      Biofouling coverage: {(initialResult.features.bio_coverage_pct).toFixed(1)}%
+                    </p>
+                    {initialResult.broken_shell && (
+                      <p style={{
+                        fontSize: "11px",
+                        color: "#c0392b",
+                        fontWeight: 600,
+                        marginTop: "6px",
+                        display: "flex",
+                        alignItems: "center",
+                        gap: "4px",
+                      }}>
+                        ⚠ Broken shell detected
+                      </p>
+                    )}
                 </div>
               </div>
 
@@ -277,7 +289,9 @@ export default function App() {
           onClick={() => !loadingFinal && document.getElementById("fileMeat").click()}
         >
           {loadingFinal && meat ? (
-            <ScanningSlot file={meat} label="Meat" />
+            <div style={{ width: "50%", aspectRatio: "1/1", overflow: "hidden", borderRadius: "8px" }}>
+              <ScanningSlot file={meat} label="Meat" />
+            </div>
           ) : meat ? (
             <div className="slot-filled">
               <img src={URL.createObjectURL(meat)} alt="meat preview" />
@@ -380,6 +394,64 @@ export default function App() {
 
             </div>
 
+            {/* Weighted score breakdown */}
+            <div style={{
+              border: "0.5px solid #d3d1c7",
+              borderRadius: "8px",
+              padding: "16px 20px",
+              marginBottom: "16px",
+              background: "#faf9f7",
+            }}>
+              <p style={{ fontSize: "12px", fontWeight: 700, color: "#2c2c2a", marginBottom: "14px" }}>
+                How the final grade was determined
+              </p>
+
+              {/* Weighted summary */}
+              <div style={{
+                borderTop: "0.5px solid #d3d1c7",
+                paddingTop: "12px",
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "center",
+              }}>
+                <div style={{ display: "flex", gap: "16px" }}>
+                  {[
+                    { label: "Meat Ratio", weight: 0.40, value: finalResult.features.meat_shell_ratio ?? 0, max: 100, higher: true },
+                    { label: "Color",      weight: 0.30, value: finalResult.features.flesh_color_dev ?? 0,  max: 100, higher: false },
+                    { label: "Biofouling", weight: 0.30, value: finalResult.features.bio_coverage_pct ?? 0, max: 100, higher: false },
+                  ].map(({ label, weight, value, max, higher }) => {
+                    const score = higher
+                      ? Math.min(value / max, 1.0)
+                      : Math.max(0, 1.0 - value / max);
+                    const contribution = (score * weight * 100).toFixed(1);
+                    return (
+                      <div key={label} style={{ textAlign: "center" }}>
+                        <p style={{ fontSize: "10px", color: "#888", marginBottom: "2px" }}>{label}</p>
+                        <p style={{ fontSize: "13px", fontWeight: 700, color: "#2c2c2a" }}>{contribution}%</p>
+                        <p style={{ fontSize: "9px", color: "#aaa" }}>of {(weight * 100).toFixed(0)}%</p>
+                      </div>
+                    );
+                  })}
+                </div>
+                <div style={{ textAlign: "right" }}>
+                  <p style={{ fontSize: "10px", color: "#888", marginBottom: "2px" }}>Overall score</p>
+                  <p style={{ fontSize: "18px", fontWeight: 700, color: "#2c2c2a" }}>
+                    {(() => {
+                      const y = finalResult.features.meat_shell_ratio ?? 0;
+                      const c = finalResult.features.flesh_color_dev ?? 0;
+                      const b = finalResult.features.bio_coverage_pct ?? 0;
+                      const score = (
+                        Math.min(y / 100, 1.0) * 0.40 +
+                        Math.max(0, 1.0 - c / 100) * 0.30 +
+                        Math.max(0, 1.0 - b / 100) * 0.30
+                      ) * 100;
+                      return score.toFixed(1) + "%";
+                    })()}
+                  </p>
+                </div>
+              </div>
+            </div>
+
             {/* Final grade row */}
             <div style={{
               display: "flex",
@@ -423,6 +495,43 @@ export default function App() {
                 ))}
               </div>
             </div>
+
+            {/* Reset button */}
+            {finalResult && (
+              <div style={{ textAlign: "center", marginTop: "24px", paddingBottom: "16px" }}>
+                <button
+                  className="btn-primary btn-green"
+                  onClick={() => {
+                    setShellA(null);
+                    setShellB(null);
+                    setMeat(null);
+                    setInitialResult(null);
+                    setFinalResult(null);
+                    // Generate new session for next assessment
+                    const newId = crypto.randomUUID();
+                    localStorage.setItem("mussel_session_id", newId);
+                    window.scrollTo({ top: 0, behavior: "smooth" });
+                  }}
+                  style={{
+                    padding: "12px 32px",
+                    background: "#0F6E56",
+                    color: "#E1F5EE",
+                    border: "none",
+                    borderRadius: "8px",
+                    fontSize: "14px",
+                    fontWeight: 600,
+                    cursor: "pointer",
+                    fontFamily: "inherit",
+                    letterSpacing: "0.02em",
+                  }}
+                >
+                  Start New Assessment
+                </button>
+                <p style={{ fontSize: "11px", color: "#888", marginTop: "8px" }}>
+                  This will clear all current results and start fresh
+                </p>
+              </div>
+            )}
 
           </div>
         )}

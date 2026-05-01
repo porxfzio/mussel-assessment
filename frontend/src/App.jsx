@@ -86,7 +86,7 @@ export default function App() {
 
       {/* ── HEADER ── */}
       <div className="header">
-        <p className="eyebrow">A Computer Vision-Based Quality Assessment <Mode></Mode></p>
+        <p className="eyebrow">A Computer Vision-Based Quality Assessment</p>
         <h1 className="page-title">Green Mussel Quality Assessment</h1>
         <p className="page-sub">
           Upload shell exterior photos for an initial grade based on biofouling,

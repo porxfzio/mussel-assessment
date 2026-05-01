@@ -1,55 +1,120 @@
-# ── feature.py ──────────────────────────────────────────────────────
+"""
+features.py
+===========
+Feature extraction pipeline for the Green Mussel Quality Assessment System.
+All calibration values, thresholds, and column orders are loaded from
+rf_config.json to guarantee they match the RF training pipeline exactly.
+"""
 
 import numpy as np
 import cv2
+import json
+import os
 
-# ── Scale calibration ──────────────────────────────────────────────────────
-# Measured from your tile calibration (10 measurements, mean = 433.45 px)
-# 1 inch tile = 25.4 mm  →  PX_PER_MM = 433.45 / 25.4 = 17.065
-# These must match what you used during feature extraction.
-TILE_MM    = 25.4
-TILE_PX    = 433.45          # ← replace with your exact mean from Cell 4 output
-PX_PER_MM  = TILE_PX / TILE_MM
-PX_PER_MM2 = PX_PER_MM ** 2
+# ── Load config ───────────────────────────────────────────────────────────────
+_CONFIG_PATH = os.path.join(os.path.dirname(__file__), "../weights/rf_config.json")
 
-CATEGORIES = ['shell', 'meat', 'residual biofouling', 'attached biofouling']
+with open(_CONFIG_PATH) as f:
+    CONFIG = json.load(f)
 
-# ── CIE Lab reference colors (empirically measured, 45 images, 15/grade) ──
-FRESH_COLOR_REFS_LAB = [
-    np.array([34.7, 11.4, 15.2]),   # Grade A flesh
-    np.array([28.2,  6.6, 12.2]),   # Grade B flesh
-    np.array([35.3, 10.4, 14.4]),   # Grade C flesh
-]
+# Calibration
+PX_PER_MM   = CONFIG["px_per_mm"]       # 17.062992125984252
+TILE_PX     = CONFIG["tile_px"]         # 433.4
+TILE_MM     = CONFIG["tile_mm"]         # 25.4
+PX_PER_MM2  = PX_PER_MM ** 2           # 291.146...
 
-# ── Feature column order — must match RF training exactly ─────────────────
-STAGE1_COLS = [
-    'shell_mm2', 'bio_attach_mm2', 'bio_resid_mm2',
-    'bio_coverage_pct', 'attach_ratio', 'bio_level',
-    'conf_shell_side', 'conf_bio_attach', 'conf_bio_resid',
-    'n_bio_attach', 'n_bio_resid',
-    'side_meat_mm2', 'side_meat_pct',
-]
-STAGE2_COLS = [
-    'meat_mm2', 'meat_shell_ratio',
-    'flesh_color_dev', 'conf_meat',
-]
-ALL_COLS = STAGE1_COLS + STAGE2_COLS
+# Column orders (must match RF training exactly)
+STAGE1_COLS = CONFIG["stage1_cols"]     # 13 features
+STAGE2_COLS = CONFIG["stage2_cols"]     # 4 features
+ALL_COLS    = CONFIG["all_cols"]        # 17 features
+
+# Score threshold for Mask R-CNN
+SCORE_THRESH = CONFIG["score_thresh"]   # 0.3
+
+# Category names (must match Detectron2 training order)
+CATEGORIES = CONFIG["categories"]       # ['shell','meat','residual biofouling','attached biofouling']
+
+# Color thresholds (from empirical calibration, 45 images)
+COLOR_THRESH_AB = CONFIG["color_thresh_AB"]   # 8
+COLOR_THRESH_BC = CONFIG["color_thresh_BC"]   # 17
+
+# Shell-to-meat ratio thresholds
+RATIO_THRESH_AB = CONFIG["ratio_thresh_AB"]   # 65
+RATIO_THRESH_BC = CONFIG["ratio_thresh_BC"]   # 50
+
+# CIE Lab reference colors per grade
+_calib = CONFIG["color_calib"]
+GRADE_LAB_REFS = {
+    "A": np.array(_calib["grade_A_lab"]),   # [34.7, 11.4, 15.2]
+    "B": np.array(_calib["grade_B_lab"]),   # [28.2,  6.6, 12.2]
+    "C": np.array(_calib["grade_C_lab"]),   # [35.3, 10.4, 14.4]
+}
 
 
-# ── CIE Lab reference swatches (from training notebook) ─────────
-import cv2
+# ═════════════════════════════════════════════════════════════════════════════
+# 1. Unit conversion helpers
+# ═════════════════════════════════════════════════════════════════════════════
 
-def _rgb_to_lab(rgb_array):
-    lab_list = []
-    for c in rgb_array:
-        lab = cv2.cvtColor(
-            c.reshape(1, 1, 3).astype(np.uint8),
-            cv2.COLOR_RGB2LAB
-        ).reshape(3)
-        lab_list.append(lab)
-    return np.array(lab_list, dtype=np.float32)
+def px_to_mm2(pixels: float) -> float:
+    """Convert pixel area → mm² using config calibration."""
+    return round(pixels / PX_PER_MM2, 4)
 
-ORANGE_RGB = np.array([
+
+def px_to_pct(region_px: float, total_px: float) -> float:
+    """Convert pixel region → % of total area. Returns 0.0 on zero division."""
+    if total_px == 0:
+        return 0.0
+    return round((region_px / total_px) * 100, 4)
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# 2. Derived feature calculations  (match training notebook exactly)
+# ═════════════════════════════════════════════════════════════════════════════
+
+def compute_attach_ratio(bio_attach_px: float, shell_px: float) -> float:
+    if shell_px == 0:
+        return 0.0
+    return round(bio_attach_px / shell_px, 4)
+
+
+def compute_bio_coverage_pct(bio_attach_px: float,
+                              bio_resid_px: float,
+                              shell_px: float) -> float:
+    total_bio = bio_attach_px + bio_resid_px
+    return px_to_pct(total_bio, shell_px)
+
+
+def compute_meat_shell_ratio(meat_px: float, shell_px: float) -> float:
+    """Meat area as % of shell area — capped at 100% to prevent false positives."""
+    if shell_px == 0:
+        return 0.0
+    ratio = round((meat_px / shell_px) * 100, 4)
+    return min(ratio, 100.0)   # ← cap at 100%
+
+
+def compute_bio_level(bio_coverage_pct: float) -> int:
+    """
+    Ordinal encoding of biofouling severity matching training data.
+      0 = clean     (0–10%)
+      1 = light     (11–30%)
+      2 = moderate  (31–50%)
+      3 = heavy     (>50%)
+    """
+    if bio_coverage_pct <= 10:
+        return 0
+    elif bio_coverage_pct <= 30:
+        return 1
+    elif bio_coverage_pct <= 50:
+        return 2
+    return 3
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# 3. Color deviation (CIE Lab DeltaE76)
+# ═════════════════════════════════════════════════════════════════════════════
+
+# Orange and cream reference swatches (same as training notebook)
+_ORANGE_RGB = np.array([
     [160,  80,  30], [140,  60,  20], [120,  45,  10],
     [170,  90,  40], [110,  35,   5], [183, 121,  65],
     [165, 100,  50], [155,  85,  40], [145,  70,  30],
@@ -60,7 +125,7 @@ ORANGE_RGB = np.array([
     [195, 135,  80], [240, 185, 120],
 ], dtype=np.uint8)
 
-CREAM_RGB = np.array([
+_CREAM_RGB = np.array([
     [213, 183, 143], [230, 210, 170], [200, 170, 130],
     [220, 200, 160], [240, 220, 185], [210, 185, 150],
     [225, 195, 155], [195, 165, 125], [235, 205, 165],
@@ -69,40 +134,41 @@ CREAM_RGB = np.array([
     [190, 165, 128],
 ], dtype=np.uint8)
 
-STANDARD_LAB = {
-    "orange": _rgb_to_lab(ORANGE_RGB),
-    "cream":  _rgb_to_lab(CREAM_RGB),
-}
 
-# Thresholds from notebook
-COLOR_THRESH_A  = 40.0
-COLOR_THRESH_B  = 80.0
+def _rgb_to_lab(rgb_array: np.ndarray) -> np.ndarray:
+    lab_list = []
+    for c in rgb_array:
+        lab = cv2.cvtColor(
+            c.reshape(1, 1, 3).astype(np.uint8),
+            cv2.COLOR_RGB2LAB
+        ).reshape(3)
+        lab_list.append(lab)
+    return np.array(lab_list, dtype=np.float32)
+
+
+_STANDARD_LAB = {
+    "orange": _rgb_to_lab(_ORANGE_RGB),
+    "cream":  _rgb_to_lab(_CREAM_RGB),
+}
 
 
 def _dominant_lab(meat_pixels_bgr: np.ndarray) -> np.ndarray:
-    """
-    Finds the dominant color cluster in meat pixels using k-means (k=3).
-    Returns the largest cluster center in LAB space.
-    Falls back to mean if k-means fails.
-    """
+    """Find dominant color cluster using k-means (k=3). Returns largest cluster center in LAB."""
     from sklearn.cluster import MiniBatchKMeans
 
     if len(meat_pixels_bgr) < 10:
-        # Too few pixels — use mean
         lab = cv2.cvtColor(
             meat_pixels_bgr.reshape(-1, 1, 3).astype(np.uint8),
             cv2.COLOR_BGR2LAB
         ).reshape(-1, 3).astype(np.float32)
         return lab.mean(axis=0)
 
-    # Sample max 5000 pixels for speed
     pixels = meat_pixels_bgr
     if len(pixels) > 5000:
         idx    = np.random.choice(len(pixels), 5000, replace=False)
         pixels = pixels[idx]
 
-    # Convert BGR → RGB → LAB
-    pixels_rgb = pixels[:, ::-1]  # BGR to RGB
+    pixels_rgb = pixels[:, ::-1]  # BGR → RGB
     lab_pixels = cv2.cvtColor(
         pixels_rgb.reshape(-1, 1, 3).astype(np.uint8),
         cv2.COLOR_RGB2LAB
@@ -111,31 +177,13 @@ def _dominant_lab(meat_pixels_bgr: np.ndarray) -> np.ndarray:
     try:
         kmeans = MiniBatchKMeans(n_clusters=3, random_state=42, n_init=3)
         labels = kmeans.fit_predict(lab_pixels)
-        # Pick the largest cluster
-        counts  = np.bincount(labels)
-        dominant_idx = int(np.argmax(counts))
+        dominant_idx = int(np.argmax(np.bincount(labels)))
         return kmeans.cluster_centers_[dominant_idx]
     except Exception:
         return lab_pixels.mean(axis=0)
 
 
-def _compute_deviation(dominant_lab: np.ndarray, color_class: str) -> float:
-    """Min LAB distance from dominant cluster to reference swatches."""
-    refs = STANDARD_LAB[color_class]
-    return float(min(np.linalg.norm(dominant_lab - r) for r in refs))
-
-
-def _assign_class(raw_dist: float) -> str:
-    if raw_dist <= COLOR_THRESH_A:
-        return "A"
-    elif raw_dist <= COLOR_THRESH_B:
-        return "B"
-    else:
-        return "C"
-
-
 def _mean_rgb_hex(meat_pixels_bgr: np.ndarray) -> str:
-    """Returns the mean color of meat pixels as a hex string."""
     mean_bgr = meat_pixels_bgr.mean(axis=0)
     r, g, b  = int(mean_bgr[2]), int(mean_bgr[1]), int(mean_bgr[0])
     return f"#{r:02x}{g:02x}{b:02x}"
@@ -143,32 +191,39 @@ def _mean_rgb_hex(meat_pixels_bgr: np.ndarray) -> str:
 
 def color_deviation(meat_pixels_bgr: np.ndarray) -> tuple:
     """
-    Classifies flesh color as orange (female) or cream (male),
-    computes LAB deviation from reference swatches, and assigns grade.
+    Classifies flesh color as orange or cream, computes LAB deviation
+    from reference swatches using thresholds from rf_config.json.
 
     Returns:
         (raw_dist, color_grade, color_label, hex_color)
+        raw_dist    — ΔE value fed into RF as flesh_color_dev
+        color_grade — 'A' if raw_dist <= thresh_AB, 'B' if <= thresh_BC, else 'C'
+        color_label — 'Orange' or 'Cream'
+        hex_color   — mean BGR hex for display
     """
     if meat_pixels_bgr is None or len(meat_pixels_bgr) == 0:
         return 50.0, "B", "Unknown", "#cccccc"
 
-    dominant = _dominant_lab(meat_pixels_bgr)
+    dominant  = _dominant_lab(meat_pixels_bgr)
     hex_color = _mean_rgb_hex(meat_pixels_bgr)
 
-    # Classify as orange or cream — whichever is closer
-    dist_orange = _compute_deviation(dominant, "orange")
-    dist_cream  = _compute_deviation(dominant, "cream")
+    dist_orange = float(min(np.linalg.norm(dominant - r) for r in _STANDARD_LAB["orange"]))
+    dist_cream  = float(min(np.linalg.norm(dominant - r) for r in _STANDARD_LAB["cream"]))
 
     if dist_orange <= dist_cream:
-        classified  = "orange"
         raw_dist    = dist_orange
         color_label = "Orange"
     else:
-        classified  = "cream"
         raw_dist    = dist_cream
         color_label = "Cream"
 
-    color_grade = _assign_class(raw_dist)
+    # Use thresholds from config
+    if raw_dist <= COLOR_THRESH_AB:
+        color_grade = "A"
+    elif raw_dist <= COLOR_THRESH_BC:
+        color_grade = "B"
+    else:
+        color_grade = "C"
 
     print(f"[color] dominant_lab:{dominant.round(1)} "
           f"dist_orange:{dist_orange:.1f} dist_cream:{dist_cream:.1f} "
@@ -177,108 +232,153 @@ def color_deviation(meat_pixels_bgr: np.ndarray) -> tuple:
     return raw_dist, color_grade, color_label, hex_color
 
 
+# ═════════════════════════════════════════════════════════════════════════════
+# 4. Stage 1 — shell side features
+# ═════════════════════════════════════════════════════════════════════════════
+
 def extract_side_features(inference_result: dict) -> dict:
     """
-    Compute Stage 1 features from one side image's inference result.
-    Mirrors extract_side_features() in your Feature Extraction notebook.
+    Converts Mask R-CNN inference output → Stage 1 feature dict.
+    Uses feature_conversion.py logic with rf_config.json calibration.
     """
     ca = inference_result["class_area"]
     cc = inference_result["class_count"]
     ms = inference_result["mean_score"]
 
-    shell_mm2   = ca['shell']               / PX_PER_MM2
-    bio_att_mm2 = ca['attached biofouling'] / PX_PER_MM2
-    bio_res_mm2 = ca['residual biofouling'] / PX_PER_MM2
-    total_bio   = bio_att_mm2 + bio_res_mm2
+    shell_px      = ca["shell"]
+    bio_attach_px = ca["attached biofouling"]
+    bio_resid_px  = ca["residual biofouling"]
+    side_meat_px  = ca["meat"]
 
-    bio_pct = min((total_bio / shell_mm2 * 100) if shell_mm2 > 0 else 0.0, 100.0)
-    attach_ratio = (bio_att_mm2 / total_bio)      if total_bio > 0 else 0.0
+    bio_coverage = compute_bio_coverage_pct(bio_attach_px, bio_resid_px, shell_px)
 
-    if   bio_pct <= 5:   bio_level = 0
-    elif bio_pct <= 25:  bio_level = 1
-    elif bio_pct <= 60:  bio_level = 2
-    else:                bio_level = 3
+    features = {
+        # mm² areas
+        "shell_mm2":        px_to_mm2(shell_px),
+        "bio_attach_mm2":   px_to_mm2(bio_attach_px),
+        "bio_resid_mm2":    px_to_mm2(bio_resid_px),
+        "side_meat_mm2":    px_to_mm2(side_meat_px),
 
-    side_meat_mm2 = ca['meat'] / PX_PER_MM2
-    visible_mm2   = shell_mm2 + side_meat_mm2
-    side_meat_pct = (side_meat_mm2 / visible_mm2 * 100) if visible_mm2 > 0 else 0.0
+        # Derived ratios / percentages
+        "bio_coverage_pct": bio_coverage,
+        "attach_ratio":     compute_attach_ratio(bio_attach_px, shell_px),
+        "side_meat_pct":    px_to_pct(side_meat_px, shell_px),
+        "bio_level":        float(compute_bio_level(bio_coverage)),
 
-    return {
-        'shell_mm2'       : shell_mm2,
-        'bio_attach_mm2'  : bio_att_mm2,
-        'bio_resid_mm2'   : bio_res_mm2,
-        'bio_coverage_pct': bio_pct,
-        'attach_ratio'    : attach_ratio,
-        'bio_level'       : float(bio_level),
-        'conf_shell_side' : ms['shell'],
-        'conf_bio_attach' : ms['attached biofouling'],
-        'conf_bio_resid'  : ms['residual biofouling'],
-        'n_bio_attach'    : float(cc['attached biofouling']),
-        'n_bio_resid'     : float(cc['residual biofouling']),
-        'side_meat_mm2'   : side_meat_mm2,
-        'side_meat_pct'   : side_meat_pct,
+        # Instance counts
+        "n_bio_attach":     float(cc["attached biofouling"]),
+        "n_bio_resid":      float(cc["residual biofouling"]),
+
+        # Confidence scores
+        "conf_shell_side":  round(ms["shell"], 4),
+        "conf_bio_attach":  round(ms["attached biofouling"], 4),
+        "conf_bio_resid":   round(ms["residual biofouling"], 4),
     }
+
+    # Validate all stage1 columns are present
+    missing = [c for c in STAGE1_COLS if c not in features]
+    if missing:
+        raise ValueError(f"Missing Stage 1 features: {missing}")
+
+    return features
 
 
 def average_side_features(feat1: dict, feat2: dict) -> dict:
     """
-    Combines firstside + secondside.
-    bio_level    → MAX (worst side counts)
-    side_meat_pct → MAX (either side showing meat is a broken shell signal)
-    side_meat_mm2 → SUM (total exposed meat across both sides)
-    all others   → mean
+    Combines Side A + Side B features.
+      bio_level     → MAX  (worst side counts)
+      side_meat_pct → MAX  (broken shell signal)
+      side_meat_mm2 → SUM  (total exposed meat)
+      all others    → mean
     """
     combined = {}
     for key in feat1:
-        if key == 'bio_level':
+        if key in ("bio_level", "side_meat_pct"):
             combined[key] = max(feat1[key], feat2[key])
-        elif key == 'side_meat_pct':
-            combined[key] = max(feat1[key], feat2[key])
-        elif key == 'side_meat_mm2':
+        elif key == "side_meat_mm2":
             combined[key] = feat1[key] + feat2[key]
         else:
             combined[key] = (feat1[key] + feat2[key]) / 2.0
     return combined
 
 
+def is_broken_shell(combined_side_features: dict) -> bool:
+    """Returns True if meat is visible from either shell side view (cracked/open shell)."""
+    return combined_side_features["side_meat_pct"] > 0
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# 5. Stage 2 — meat image features
+# ═════════════════════════════════════════════════════════════════════════════
+
 def extract_meat_features(inference_result: dict, shell_mm2_from_side: float) -> dict:
+    """
+    Converts meat image inference output → Stage 2 feature dict.
+    meat_shell_ratio uses px_to_pct(meat_px, shell_px) matching training.
+    """
     ca = inference_result["class_area"]
     ms = inference_result["mean_score"]
 
-    meat_mm2         = ca['meat'] / PX_PER_MM2
-    meat_shell_ratio = (meat_mm2 / shell_mm2_from_side * 100) \
-                       if shell_mm2_from_side > 0 else 0.0
+    meat_px  = ca["meat"]
+    # Convert shell_mm2 back to px for ratio calculation
+    shell_px = shell_mm2_from_side * PX_PER_MM2
 
     raw_dist, color_grade, color_label, hex_color = color_deviation(
         inference_result["meat_pixels_bgr"]
     )
 
-    return {
-        'meat_mm2':           meat_mm2,
-        'meat_shell_ratio':   meat_shell_ratio,
-        'flesh_color_dev':    raw_dist,        # raw ΔE — what RF uses
-        'conf_meat':          ms['meat'],
-        # Display fields
-        'flesh_color_grade':  color_grade,     # A / B / C
-        'flesh_color_label':  color_label,     # Orange (Female) / Cream (Male)
-        'flesh_color_hex':    hex_color,       # actual detected color
+    features = {
+        "meat_mm2":          px_to_mm2(meat_px),
+        "meat_shell_ratio":  compute_meat_shell_ratio(meat_px, shell_px),
+        "flesh_color_dev":   round(raw_dist, 4),
+        "conf_meat":         round(ms["meat"], 4),
+        # Display-only fields (not fed to RF)
+        "flesh_color_grade": color_grade,
+        "flesh_color_label": color_label,
+        "flesh_color_hex":   hex_color,
     }
 
+    return features
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# 6. Build model input arrays
+# ═════════════════════════════════════════════════════════════════════════════
 
 def build_stage1_vector(combined_side_features: dict) -> list:
-    """Returns feature values in the exact column order STAGE1_COLS."""
+    """Returns 13 values in STAGE1_COLS order — fed to rf_stage1_shell.pkl."""
     return [combined_side_features[c] for c in STAGE1_COLS]
 
 
 def build_all_vector(combined_side_features: dict, meat_features: dict) -> list:
-    """Returns feature values in the exact column order ALL_COLS."""
+    """Returns 17 values in ALL_COLS order — fed to rf_stage2_final.pkl."""
     merged = {**combined_side_features, **meat_features}
     return [merged[c] for c in ALL_COLS]
 
 
-def is_broken_shell(combined_side_features: dict) -> bool:
+# ═════════════════════════════════════════════════════════════════════════════
+# 7. Range validation (catches bad images / segmentation failures)
+# ═════════════════════════════════════════════════════════════════════════════
+
+def validate_ranges(features: dict) -> list:
     """
-    Returns True if side_meat_pct > 0 on the worst side —
-    exposed meat on a shell view means the shell is cracked/open.
+    Checks features are within expected ranges.
+    Returns list of warning strings — empty list = all OK.
     """
-    return combined_side_features['side_meat_pct'] > 0
+    checks = {
+        "shell_mm2":        (50,   2000),
+        "bio_coverage_pct": (0,    100),
+        "meat_shell_ratio": (0,    100),
+        "flesh_color_dev":  (0,    50),
+        "conf_shell_side":  (0.5,  1.0),
+        "conf_meat":        (0.5,  1.0),
+    }
+    warnings = []
+    for feat, (lo, hi) in checks.items():
+        if feat in features:
+            val = features[feat]
+            if not (lo <= val <= hi):
+                warnings.append(
+                    f"WARNING: {feat}={val:.3f} outside expected range [{lo}, {hi}]"
+                )
+    return warnings

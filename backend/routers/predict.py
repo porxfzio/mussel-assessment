@@ -1,7 +1,6 @@
 from fastapi import APIRouter, UploadFile, File, HTTPException
 import numpy as np
 import cv2
-import io
 
 from models.maskrcnn import run_inference
 from models.classifier import predict_initial_grade, predict_final_grade
@@ -29,25 +28,35 @@ def _read_bgr(upload_file) -> np.ndarray:
 async def initial_grade(session_id: str,
                          shell_a: UploadFile = File(...),
                          shell_b: UploadFile = File(...)):
+    # Decode images
     img_a = _read_bgr(shell_a)
     img_b = _read_bgr(shell_b)
 
-    result_a = run_inference(img_a)
-    result_b = run_inference(img_b)
+    # Run Mask R-CNN with is_shell_photo=True
+    # This applies stricter meat thresholds:
+    #   confidence >= 0.85 AND area >= 2000px
+    # to block nacre false positives while still
+    # detecting genuine broken shell meat
+    result_a = run_inference(img_a, is_shell_photo=True)
+    result_b = run_inference(img_b, is_shell_photo=True)
 
+    # Extract and combine features
     feat_a   = extract_side_features(result_a)
     feat_b   = extract_side_features(result_b)
     combined = average_side_features(feat_a, feat_b)
     broken   = is_broken_shell(combined)
 
-    vec_s1   = build_stage1_vector(combined)
-    result   = predict_initial_grade(vec_s1)
+    # Predict initial grade
+    vec_s1 = build_stage1_vector(combined)
+    result = predict_initial_grade(vec_s1)
 
+    # Upload images to Supabase
     shell_a.file.seek(0)
     shell_b.file.seek(0)
     path_a = upload_image(session_id, "shell_a", shell_a.file.read())
     path_b = upload_image(session_id, "shell_b", shell_b.file.read())
 
+    # Persist to DB
     update_session(session_id, {
         "stage":            2,
         "shell_a_path":     path_a,
@@ -61,52 +70,64 @@ async def initial_grade(session_id: str,
         "probabilities": result["probabilities"],
         "broken_shell":  broken,
         "features":      combined,
-        "shell_a":       result_a["shell_b64"],    # ← new
-        "shell_b":       result_b["shell_b64"],    # ← new
-        "bio_a":         result_a["bio_b64"],      # ← new
-        "bio_b":         result_b["bio_b64"],      # ← new
         "overlay_a":     result_a["overlay_b64"],
         "overlay_b":     result_b["overlay_b64"],
+        "shell_a":       result_a["shell_b64"],
+        "shell_b":       result_b["shell_b64"],
+        "bio_a":         result_a["bio_b64"],
+        "bio_b":         result_b["bio_b64"],
     }
 
 
 @router.post("/final/{session_id}")
 async def final_grade(session_id: str,
                        meat: UploadFile = File(...)):
+    # Validate session
     session = get_session(session_id)
     if not session or not session.get("initial_features"):
         raise HTTPException(400, "Complete initial grading first")
 
-    img_meat    = _read_bgr(meat)
-    result_meat = run_inference(img_meat)
+    # Decode meat image
+    img_meat = _read_bgr(meat)
 
-    combined    = session["initial_features"]
-    broken      = is_broken_shell(combined)
+    # Run Mask R-CNN with is_shell_photo=False
+    # This uses more lenient meat thresholds:
+    #   confidence >= 0.50 AND area >= 500px
+    # since meat is expected and dominant in this photo
+    result_meat = run_inference(img_meat, is_shell_photo=False)
 
-    meat_feats  = extract_meat_features(result_meat, combined["shell_mm2"])
-    vec_all     = build_all_vector(combined, meat_feats)
+    # ── DEBUG: paste these 3 lines ─────────────────────────────────────────
+    print("[DEBUG] meat image class_area:", result_meat["class_area"])
+    combined_debug = session["initial_features"]
+    print("[DEBUG] shell_mm2 from side:", combined_debug["shell_mm2"])
+    # ──────────────────────────────────────────────────────────────────────
 
-    result      = predict_final_grade(vec_all, broken_shell=broken)
+    # Extract features
+    combined   = session["initial_features"]
+    broken     = is_broken_shell(combined)
+    meat_feats = extract_meat_features(result_meat, combined["shell_mm2"])
+    vec_all    = build_all_vector(combined, meat_feats)
 
+    # Predict final grade
+    result = predict_final_grade(vec_all, broken_shell=broken)
+
+    # Upload meat image
     meat.file.seek(0)
     path_meat = upload_image(session_id, "meat", meat.file.read())
 
+    # Persist to DB
     update_session(session_id, {
-        "stage":         4,
-        "meat_path":     path_meat,
-        "final_grade":   result["grade"],
+        "stage":          4,
+        "meat_path":      path_meat,
+        "final_grade":    result["grade"],
         "final_features": {**combined, **meat_feats},
     })
 
     return {
-        "session_id":            session_id,
         "grade":                 result["grade"],
         "rf_grade":              result["rf_grade"],
         "broken_shell_override": result["broken_shell_override"],
         "probabilities":         result["probabilities"],
         "features":              {**combined, **meat_feats},
         "overlay_meat":          result_meat["overlay_b64"],
-        "flesh_color_label":     meat_feats.get("flesh_color_label", "Unknown"),
-        "flesh_color_hex":       meat_feats.get("flesh_color_hex", "#cccccc"),
-        "flesh_color_grade":     meat_feats.get("flesh_color_grade", "B"),
     }

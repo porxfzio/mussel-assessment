@@ -317,7 +317,7 @@ export default function App() {
                 <div style={{ padding: "14px 16px", textAlign: "center", borderRight: "0.5px solid #d3d1c7", background: "#faf9f7" }}>
                   <p style={{ fontSize: "13px", color: "#555", marginBottom: "6px", fontWeight: 700 }}>Color Deviation</p>
                   <p style={{ fontSize: "9px", color: "#aaa", marginBottom: "6px", fontStyle: "italic" }}>
-                    {colorLabel}
+                    ‎
                   </p>
                   <p style={{ fontSize: "20px", fontWeight: 700, color: "#2c2c2a", fontVariantNumeric: "tabular-nums" }}>
                     {colorDev.toFixed(1)}%

@@ -10,17 +10,20 @@ meat_shell_ratio stats from mussel_features_183.csv:
   Grade A mean=68.1  |  Grade B mean=62.6  |  Grade C mean=56.6
   Thresholds: High >= 68, Medium >= 56, Low < 56
 
-FIX (meat_shell_ratio denominator):
+FIX 1 (meat_shell_ratio denominator):
   Removed × 2 from shell_px to match training notebook exactly:
     shell_px = shell_mm2_from_side * PX_PER_MM2   (no × 2)
 
-NOTE (display ratio):
-  The pixel-based ratio is shown as-is — no ÷2 scaling applied.
-  The RF receives raw_ratio exactly as trained.
-  meat_yield_weight_approx maps the pixel ratio to an approximate
-  weight-based range from the grading table, shown for reference only.
-  This mapping is not a validated physical conversion — it is an
-  indicative label based on the study's grading table thresholds.
+FIX 2 (color deviation — grade reference comparison):
+  Previously compared against generic orange/cream RGB palettes.
+  Corrected to use per-grade CIE Lab references from rf_config.json.
+
+FIX 3 (color deviation — OpenCV Lab encoding):
+  rf_config stores Lab in standard scale: L(0–100), a(-128–127), b(-128–127)
+  OpenCV COLOR_BGR2LAB encodes as:        L(0–255), a(0–255), b(0–255)
+  where a and b are shifted by +128 and L is scaled by 255/100.
+  Grade references are converted to OpenCV encoding before comparison
+  so distances are computed on the same scale as the extracted pixels.
 """
 
 import numpy as np
@@ -51,23 +54,33 @@ SCORE_THRESH = CONFIG["score_thresh"]   # 0.3
 # Category names (must match Detectron2 training order)
 CATEGORIES = CONFIG["categories"]
 
-# Color thresholds (from empirical calibration, 45 images)
+# Color thresholds from config
 COLOR_THRESH_AB = CONFIG["color_thresh_AB"]   # 8
 COLOR_THRESH_BC = CONFIG["color_thresh_BC"]   # 17
 
 # Shell-to-meat ratio display thresholds (pixel scale from training data)
-#   Grade A mean = 68.1%  →  High   >= 68
-#   Grade B mean = 62.6%  →  Medium >= 56
-#   Grade C mean = 56.6%  →  Low    <  56
 RATIO_DISPLAY_HIGH   = 68.0
 RATIO_DISPLAY_MEDIUM = 56.0
 
-# CIE Lab reference colors per grade
+
+# ── Convert standard CIE Lab → OpenCV Lab encoding ───────────────────────────
+# rf_config stores standard Lab: L(0–100), a(-128–127), b(-128–127)
+# OpenCV COLOR_BGR2LAB encodes:  L(0–255), a(0–255)+128, b(0–255)+128
+# Must convert references to OpenCV scale so distance computation is consistent.
+def _std_lab_to_opencv(lab):
+    L, a, b = lab
+    return np.array([
+        L * 255.0 / 100.0,   # L: 0–100  → 0–255
+        a + 128.0,            # a: -128–127 → 0–255
+        b + 128.0,            # b: -128–127 → 0–255
+    ], dtype=np.float32)
+
+
 _calib = CONFIG["color_calib"]
 GRADE_LAB_REFS = {
-    "A": np.array(_calib["grade_A_lab"]),
-    "B": np.array(_calib["grade_B_lab"]),
-    "C": np.array(_calib["grade_C_lab"]),
+    "A": _std_lab_to_opencv(_calib["grade_A_lab"]),  # [34.7, 11.4, 15.2] → OpenCV
+    "B": _std_lab_to_opencv(_calib["grade_B_lab"]),  # [28.2,  6.6, 12.2] → OpenCV
+    "C": _std_lab_to_opencv(_calib["grade_C_lab"]),  # [35.3, 10.4, 14.4] → OpenCV
 }
 
 
@@ -76,10 +89,12 @@ GRADE_LAB_REFS = {
 # ═════════════════════════════════════════════════════════════════════════════
 
 def px_to_mm2(pixels: float) -> float:
+    """Convert pixel area → mm² using config calibration."""
     return round(pixels / PX_PER_MM2, 4)
 
 
 def px_to_pct(region_px: float, total_px: float) -> float:
+    """Convert pixel region → % of total area. Returns 0.0 on zero division."""
     if total_px == 0:
         return 0.0
     return round((region_px / total_px) * 100, 4)
@@ -112,6 +127,13 @@ def compute_meat_shell_ratio(meat_px: float, shell_px: float) -> float:
 
 
 def compute_bio_level(bio_coverage_pct: float) -> int:
+    """
+    Ordinal encoding of biofouling severity matching training data.
+      0 = clean     (0–10%)
+      1 = light     (11–30%)
+      2 = moderate  (31–50%)
+      3 = heavy     (>50%)
+    """
     if bio_coverage_pct <= 10:
         return 0
     elif bio_coverage_pct <= 30:
@@ -122,12 +144,6 @@ def compute_bio_level(bio_coverage_pct: float) -> int:
 
 
 def meat_yield_label(ratio: float) -> str:
-    """
-    Pixel-based meat yield label aligned to training data distribution.
-      >= 68% → High meat yield   (Grade A range)
-      >= 56% → Medium meat yield (Grade B range)
-      <  56% → Low meat yield   (Grade C range)
-    """
     if ratio >= RATIO_DISPLAY_HIGH:
         return "High meat yield"
     elif ratio >= RATIO_DISPLAY_MEDIUM:
@@ -136,13 +152,6 @@ def meat_yield_label(ratio: float) -> str:
 
 
 def meat_yield_weight_approx(ratio: float) -> str:
-    """
-    Maps pixel ratio to approximate weight-based range from the grading table.
-    Shown in UI for reference only — not a validated physical conversion.
-      Pixel >= 68%  →  est. weight yield: above 25%  (Grade A)
-      Pixel >= 56%  →  est. weight yield: 20–25%     (Grade B)
-      Pixel <  56%  →  est. weight yield: below 20%  (Grade C)
-    """
     if ratio >= RATIO_DISPLAY_HIGH:
         return "above 25%"
     elif ratio >= RATIO_DISPLAY_MEDIUM:
@@ -165,48 +174,14 @@ def color_deviation_label(raw_dist: float) -> str:
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# 3. Color deviation (CIE Lab DeltaE76)
+# 3. Color deviation (CIE Lab DeltaE76) — using grade Lab references
 # ═════════════════════════════════════════════════════════════════════════════
 
-_ORANGE_RGB = np.array([
-    [160,  80,  30], [140,  60,  20], [120,  45,  10],
-    [170,  90,  40], [110,  35,   5], [183, 121,  65],
-    [165, 100,  50], [155,  85,  40], [145,  70,  30],
-    [130,  55,  20], [110,   1,   0], [100,  20,  10],
-    [ 90,  10,   5], [220, 160, 100], [210, 150,  90],
-    [230, 170, 110], [200, 140,  85], [215, 155,  95],
-    [225, 165, 105], [205, 145,  88], [235, 175, 115],
-    [195, 135,  80], [240, 185, 120],
-], dtype=np.uint8)
-
-_CREAM_RGB = np.array([
-    [213, 183, 143], [230, 210, 170], [200, 170, 130],
-    [220, 200, 160], [240, 220, 185], [210, 185, 150],
-    [225, 195, 155], [195, 165, 125], [235, 205, 165],
-    [205, 175, 135], [245, 235, 215], [250, 240, 225],
-    [238, 228, 210], [185, 160, 120], [175, 150, 110],
-    [190, 165, 128],
-], dtype=np.uint8)
-
-
-def _rgb_to_lab(rgb_array: np.ndarray) -> np.ndarray:
-    lab_list = []
-    for c in rgb_array:
-        lab = cv2.cvtColor(
-            c.reshape(1, 1, 3).astype(np.uint8),
-            cv2.COLOR_RGB2LAB
-        ).reshape(3)
-        lab_list.append(lab)
-    return np.array(lab_list, dtype=np.float32)
-
-
-_STANDARD_LAB = {
-    "orange": _rgb_to_lab(_ORANGE_RGB),
-    "cream":  _rgb_to_lab(_CREAM_RGB),
-}
-
-
 def _dominant_lab(meat_pixels_bgr: np.ndarray) -> np.ndarray:
+    """
+    Find dominant color of meat region using k-means (k=3) in CIE Lab space.
+    Returns Lab values in OpenCV encoding (L: 0–255, a/b: 0–255).
+    """
     from sklearn.cluster import MiniBatchKMeans
 
     if len(meat_pixels_bgr) < 10:
@@ -221,10 +196,9 @@ def _dominant_lab(meat_pixels_bgr: np.ndarray) -> np.ndarray:
         idx    = np.random.choice(len(pixels), 5000, replace=False)
         pixels = pixels[idx]
 
-    pixels_rgb = pixels[:, ::-1]
     lab_pixels = cv2.cvtColor(
-        pixels_rgb.reshape(-1, 1, 3).astype(np.uint8),
-        cv2.COLOR_RGB2LAB
+        pixels.reshape(-1, 1, 3).astype(np.uint8),
+        cv2.COLOR_BGR2LAB
     ).reshape(-1, 3).astype(np.float32)
 
     try:
@@ -244,35 +218,44 @@ def _mean_rgb_hex(meat_pixels_bgr: np.ndarray) -> str:
 
 def color_deviation(meat_pixels_bgr: np.ndarray) -> tuple:
     """
-    Classifies flesh color as orange or cream, computes LAB deviation.
-    Returns: (raw_dist, color_grade, color_label, hex_color)
+    Computes flesh color deviation using CIE Lab DeltaE76 against the
+    three per-grade reference colors from rf_config.json.
+
+    Both the dominant meat color and the grade references are in
+    OpenCV Lab encoding (L: 0–255, a/b: 0–255) so the distance
+    computation is on a consistent scale.
+
+    Method:
+      1. Extract dominant Lab color from meat pixels via k-means
+      2. Compute DeltaE76 distance to each grade reference (A, B, C)
+      3. Nearest grade reference → color_grade
+      4. Distance to nearest reference → raw_dist (fed to RF)
+
+    Returns:
+        (raw_dist, color_grade, color_label, hex_color)
     """
     if meat_pixels_bgr is None or len(meat_pixels_bgr) == 0:
-        return 50.0, "B", "Unknown", "#cccccc"
+        return 50.0, "C", "Unknown", "#cccccc"
 
     dominant  = _dominant_lab(meat_pixels_bgr)
     hex_color = _mean_rgb_hex(meat_pixels_bgr)
 
-    dist_orange = float(min(np.linalg.norm(dominant - r) for r in _STANDARD_LAB["orange"]))
-    dist_cream  = float(min(np.linalg.norm(dominant - r) for r in _STANDARD_LAB["cream"]))
+    # Compute DeltaE76 to each grade reference (all in OpenCV Lab scale)
+    dist_A = float(np.linalg.norm(dominant - GRADE_LAB_REFS["A"]))
+    dist_B = float(np.linalg.norm(dominant - GRADE_LAB_REFS["B"]))
+    dist_C = float(np.linalg.norm(dominant - GRADE_LAB_REFS["C"]))
 
-    if dist_orange <= dist_cream:
-        raw_dist    = dist_orange
-        color_label = "Orange"
-    else:
-        raw_dist    = dist_cream
-        color_label = "Cream"
+    print(f"[color] dominant_lab(opencv):{dominant.round(1)} "
+          f"dist_A:{dist_A:.1f} dist_B:{dist_B:.1f} dist_C:{dist_C:.1f}")
 
-    if raw_dist <= COLOR_THRESH_AB:
-        color_grade = "A"
-    elif raw_dist <= COLOR_THRESH_BC:
-        color_grade = "B"
-    else:
-        color_grade = "C"
+    # Nearest grade reference determines color grade
+    min_dist    = min(dist_A, dist_B, dist_C)
+    color_grade = "A" if min_dist == dist_A else "B" if min_dist == dist_B else "C"
+    raw_dist    = min_dist
+    color_label = color_deviation_label(raw_dist)
 
-    print(f"[color] dominant_lab:{dominant.round(1)} "
-          f"dist_orange:{dist_orange:.1f} dist_cream:{dist_cream:.1f} "
-          f"→ {color_label} ΔE:{raw_dist:.1f} grade:{color_grade}")
+    print(f"[color] → nearest grade:{color_grade}  "
+          f"ΔE:{raw_dist:.1f}  label:{color_label}")
 
     return raw_dist, color_grade, color_label, hex_color
 
@@ -317,6 +300,13 @@ def extract_side_features(inference_result: dict) -> dict:
 
 
 def average_side_features(feat1: dict, feat2: dict) -> dict:
+    """
+    Combines Side A + Side B features.
+      bio_level     → MAX
+      side_meat_pct → MAX
+      side_meat_mm2 → SUM
+      all others    → mean
+    """
     combined = {}
     for key in feat1:
         if key in ("bio_level", "side_meat_pct"):
@@ -341,11 +331,7 @@ def extract_meat_features(inference_result: dict, shell_mm2_from_side: float) ->
     Converts meat image inference output → Stage 2 feature dict.
 
     Denominator: shell_px = shell_mm2_from_side * PX_PER_MM2  (no × 2)
-    Matches training notebook exactly.
-
-    Display: raw pixel ratio shown as-is, capped at 100 for UI.
-    meat_yield_weight_approx provides an indicative weight-based range
-    from the grading table — for reference only, not a validated conversion.
+    Color deviation: uses per-grade Lab references in OpenCV encoding.
     """
     ca = inference_result["class_area"]
     ms = inference_result["mean_score"]
@@ -392,10 +378,12 @@ def extract_meat_features(inference_result: dict, shell_mm2_from_side: float) ->
 # ═════════════════════════════════════════════════════════════════════════════
 
 def build_stage1_vector(combined_side_features: dict) -> list:
+    """Returns 13 values in STAGE1_COLS order — fed to rf_stage1_shell.pkl."""
     return [combined_side_features[c] for c in STAGE1_COLS]
 
 
 def build_all_vector(combined_side_features: dict, meat_features: dict) -> list:
+    """Returns 17 values in ALL_COLS order — fed to rf_stage2_final.pkl."""
     merged = {**combined_side_features, **meat_features}
     return [merged[c] for c in ALL_COLS]
 
@@ -405,6 +393,10 @@ def build_all_vector(combined_side_features: dict, meat_features: dict) -> list:
 # ═════════════════════════════════════════════════════════════════════════════
 
 def validate_ranges(features: dict) -> list:
+    """
+    Checks features are within expected ranges.
+    Returns list of warning strings — empty list = all OK.
+    """
     checks = {
         "shell_mm2":        (50,    2000),
         "bio_coverage_pct": (0,     100),

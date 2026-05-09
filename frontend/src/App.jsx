@@ -65,17 +65,25 @@ export default function App() {
     setLoadingInitial(false);
   }
 
-  async function getFinalGrade() {
-    const form = new FormData();
-    form.append("meat", meat);
-    setLoadingFinal(true);
-    try {
-      const res = await fetch(`${API_BASE}/predict/final/${sessionId}`, { method: "POST", body: form });
-      const data = await res.json();
-      setFinalResult(data);
-    } catch (err) { alert("Error getting final grade"); }
-    setLoadingFinal(false);
+ async function getFinalGrade() {
+  const form = new FormData();
+  form.append("meat", meat);
+  setLoadingFinal(true);
+  try {
+    const res = await fetch(`${API_BASE}/predict/final/${sessionId}`, { method: "POST", body: form });
+    if (!res.ok) {
+      const err = await res.text();
+      alert("Error getting final grade: " + err);
+      setLoadingFinal(false);
+      return;
+    }
+    const data = await res.json();
+    setFinalResult(data);
+  } catch (err) {
+    alert("Error getting final grade");
   }
+  setLoadingFinal(false);
+}
 
   const getGradeClass = (g) => g === "A" ? "gc-a" : g === "B" ? "gc-b" : "gc-c";
   const getBadgeClass = (g) => g === "A" ? "gb-a" : g === "B" ? "gb-b" : "gb-c";

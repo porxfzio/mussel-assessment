@@ -18,12 +18,6 @@ def _load_models():
 
 
 def predict_initial_grade(stage1_vector: list) -> dict:
-    """
-    Stage 1 — Initial grade using rf_stage1_shell.pkl.
-    The RF predicts grade based on the 13 external shell features.
-    If a broken shell is detected (side_meat_pct > 0), grade is
-    overridden to C regardless of RF output.
-    """
     _load_models()
 
     from services.features import STAGE1_COLS
@@ -52,11 +46,6 @@ def predict_initial_grade(stage1_vector: list) -> dict:
 
 
 def predict_final_grade(all_vector: list, broken_shell: bool = False) -> dict:
-    """
-    Stage 2 — Final grade using rf_stage2_final.pkl.
-    The RF predicts grade based on the full 17-feature vector.
-    If a broken shell was detected in Stage 1, grade is overridden to C.
-    """
     _load_models()
 
     x        = np.array([all_vector])

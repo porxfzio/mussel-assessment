@@ -8,16 +8,12 @@ from detectron2.config import get_cfg
 from detectron2.engine import DefaultPredictor
 from detectron2 import model_zoo
 
-# ── Class definitions (must match COCO JSON training order) ──────────────────
 CATEGORIES = ['shell', 'meat', 'residual biofouling', 'attached biofouling']
 
-# ── Model path ────────────────────────────────────────────────────────────────
 MODEL_PATH = os.path.join(os.path.dirname(__file__), "../weights/model.pth")
 
-# ── Global score threshold (Detectron2 initial filter) ───────────────────────
 SCORE_THRESH = 0.1
 
-# ── Per-class score thresholds ────────────────────────────────────────────────
 CLASS_THRESH = {
     "shell":               0.3,
     "residual biofouling": 0.3,
@@ -25,15 +21,10 @@ CLASS_THRESH = {
     "meat":                0.5,
 }
 
-# ── Minimum meat pixel area — separate per photo type ────────────────────────
-# meat.jpg  : high threshold filters nacre false positives from the empty
-#             shell half in butterfly-style opened mussel photos.
-# side photos: low threshold preserves small exposed meat regions on
-#              broken shells, which are a genuine Grade C signal.
 MIN_MEAT_PX_MEAT_PHOTO  = 500   # meat.jpg — strict, avoids nacre false positives
 MIN_MEAT_PX_SHELL_PHOTO = 50    # side A/B — lenient, allows broken shell meat
 
-# ── Overlay colors (RGBA) ─────────────────────────────────────────────────────
+# Overlay colors (RGBA)
 COLOR_MAP = {
     "shell":                (100, 200, 100, 120),
     "meat":                 (200, 120, 200, 140),
@@ -68,15 +59,6 @@ def get_predictor():
 
 def _keep_largest_meat_only(pred_classes, scores, masks, image_bgr,
                              min_meat_px: int) -> set:
-    """
-    Among all meat detections, keep only the one that:
-    1. Has warm meat-like color (orange/cream) — primary filter
-    2. Is the largest among those that pass color check
-    If NO detection passes color check, fall back to largest overall.
-
-    min_meat_px is passed in from run_inference so that shell photos
-    and meat photos can use different minimum area thresholds.
-    """
     meat_candidates = []
     for i, cls_idx in enumerate(pred_classes):
         if CATEGORIES[cls_idx] != "meat":
@@ -91,16 +73,7 @@ def _keep_largest_meat_only(pred_classes, scores, masks, image_bgr,
     if len(meat_candidates) == 1:
         return {meat_candidates[0][0]}
 
-    # ── Score each candidate by color ────────────────────────────────────────
     def _meat_color_score(mask, image_bgr):
-        """
-        Returns a score 0-3 based on how much the region looks like real meat.
-        Higher = more meat-like color.
-        3 = warm orange/cream (real meat)
-        2 = ambiguous warm tone
-        1 = ambiguous cool tone
-        0 = nacre / bluish / desaturated (false positive)
-        """
         pixels_bgr = image_bgr[mask.astype(bool)]
         if len(pixels_bgr) == 0:
             return 0
@@ -135,7 +108,6 @@ def _keep_largest_meat_only(pred_classes, scores, masks, image_bgr,
         print("AMBIGUOUS (score 1)")
         return 1
 
-    # Score each candidate
     scored = []
     for i, mask_area, score in meat_candidates:
         color_score = _meat_color_score(masks[i], image_bgr)
@@ -157,7 +129,6 @@ def _keep_largest_meat_only(pred_classes, scores, masks, image_bgr,
 
 def _passes_filter(cls: str, score: float, mask_area: float,
                    min_meat_px: int) -> bool:
-    """Base filter: per-class score threshold + minimum meat pixel area."""
     if score < CLASS_THRESH.get(cls, SCORE_THRESH):
         return False
     if cls == "meat" and mask_area < min_meat_px:
@@ -166,7 +137,6 @@ def _passes_filter(cls: str, score: float, mask_area: float,
 
 
 def _blend(bgr_img: np.ndarray, overlay_rgba: np.ndarray) -> str:
-    """Alpha-composites RGBA overlay onto BGR image. Returns base64 PNG."""
     rgb     = cv2.cvtColor(bgr_img, cv2.COLOR_BGR2RGB)
     base    = PILImage.fromarray(rgb).convert("RGBA")
     top     = PILImage.fromarray(overlay_rgba, mode="RGBA")
@@ -177,43 +147,7 @@ def _blend(bgr_img: np.ndarray, overlay_rgba: np.ndarray) -> str:
 
 
 def run_inference(image_bgr: np.ndarray, is_shell_photo: bool = False) -> dict:
-    """
-    Runs Mask R-CNN on a BGR numpy image.
-
-    Parameters
-    ----------
-    image_bgr      : np.ndarray — BGR image from cv2.imdecode
-    is_shell_photo : bool — True for Stage 1 shell side photos,
-                            False for Stage 2 meat photo.
-
-    Minimum meat pixel threshold:
-    ─────────────────────────────
-    Shell photos (is_shell_photo=True)  → MIN_MEAT_PX_SHELL_PHOTO = 50
-      Low threshold so small exposed meat patches on broken shells
-      are not discarded — these are a genuine Grade C indicator.
-
-    Meat photos (is_shell_photo=False)  → MIN_MEAT_PX_MEAT_PHOTO = 500
-      High threshold filters nacre false positives from the empty
-      shell half in butterfly-style opened mussel photos.
-
-    Single Largest Meat Logic
-    ─────────────────────────
-    Only the single best meat detection is retained per image.
-    All others are discarded as false positives.
-
-    Returns
-    -------
-    dict:
-        class_area      — filtered pixel counts per class
-        class_count     — filtered instance counts per class
-        mean_score      — mean confidence per class
-        total_pixels    — total image pixel count
-        overlay_b64     — full 4-class overlay as base64 PNG
-        shell_b64       — shell-only overlay as base64 PNG
-        bio_b64         — biofouling-only overlay as base64 PNG
-        meat_pixels_bgr — BGR pixel values of meat region for color analysis
-    """
-    # ── Select threshold based on photo type ─────────────────────────────────
+    # Select threshold based on photo type 
     min_meat_px = MIN_MEAT_PX_SHELL_PHOTO if is_shell_photo else MIN_MEAT_PX_MEAT_PHOTO
     print(f"[inference] is_shell_photo={is_shell_photo}  min_meat_px={min_meat_px}")
 
@@ -225,12 +159,12 @@ def run_inference(image_bgr: np.ndarray, is_shell_photo: bool = False) -> dict:
     scores       = instances.scores.numpy()
     masks        = instances.pred_masks.numpy()
 
-    # ── Determine the single valid meat detection index ───────────────────────
+    # Determine the single valid meat detection index
     valid_meat_indices = _keep_largest_meat_only(
         pred_classes, scores, masks, image_bgr, min_meat_px
     )
 
-    # ── Accumulate filtered detections ───────────────────────────────────────
+    # Accumulate filtered detections 
     class_area    = {c: 0.0 for c in CATEGORIES}
     class_score   = {c: []  for c in CATEGORIES}
     class_count   = {c: 0   for c in CATEGORIES}
@@ -262,7 +196,7 @@ def run_inference(image_bgr: np.ndarray, is_shell_photo: bool = False) -> dict:
 
     h, w = image_bgr.shape[:2]
 
-    # ── Full combined overlay ─────────────────────────────────────────────────
+    # Full combined overlay
     overlay = np.zeros((h, w, 4), dtype=np.uint8)
     for cls, color in COLOR_MAP.items():
         combined = np.zeros((h, w), dtype=bool)
@@ -280,7 +214,7 @@ def run_inference(image_bgr: np.ndarray, is_shell_photo: bool = False) -> dict:
             overlay[combined] = color
     overlay_b64 = _blend(image_bgr, overlay)
 
-    # ── Shell-only overlay ────────────────────────────────────────────────────
+    # Shell-only overlay 
     shell_overlay = np.zeros((h, w, 4), dtype=np.uint8)
     for i, cls_idx in enumerate(pred_classes):
         cls = CATEGORIES[cls_idx]
@@ -291,7 +225,7 @@ def run_inference(image_bgr: np.ndarray, is_shell_photo: bool = False) -> dict:
         shell_overlay[masks[i].astype(bool)] = (100, 180, 255, 140)
     shell_b64 = _blend(image_bgr, shell_overlay)
 
-    # ── Biofouling-only overlay ───────────────────────────────────────────────
+    # Biofouling-only overlay 
     bio_overlay = np.zeros((h, w, 4), dtype=np.uint8)
     for i, cls_idx in enumerate(pred_classes):
         cls = CATEGORIES[cls_idx]
@@ -302,7 +236,7 @@ def run_inference(image_bgr: np.ndarray, is_shell_photo: bool = False) -> dict:
         bio_overlay[masks[i].astype(bool)] = (220, 80, 80, 160)
     bio_b64 = _blend(image_bgr, bio_overlay)
 
-    # ── Meat pixels for color analysis ───────────────────────────────────────
+    # Meat pixels for color analysis 
     meat_pixels_bgr = image_bgr[meat_mask_all] if meat_mask_all.any() else None
 
     return {

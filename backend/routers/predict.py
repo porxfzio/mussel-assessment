@@ -9,13 +9,15 @@ from services.features import (
     extract_meat_features, build_stage1_vector,
     build_all_vector, is_broken_shell,
 )
-from services.supabase import upload_image, get_session, update_session
+from services.database import (
+    upload_image, get_session, update_session, ensure_session_exists
+)
 
 router = APIRouter()
 
 
 def _read_bgr(upload_file) -> np.ndarray:
-    """Decode an UploadFile to a BGR numpy array (cv2 format)."""
+    """Decode an UploadFile to a BGR numpy array."""
     data = upload_file.file.read()
     arr  = np.frombuffer(data, np.uint8)
     img  = cv2.imdecode(arr, cv2.IMREAD_COLOR)
@@ -26,17 +28,17 @@ def _read_bgr(upload_file) -> np.ndarray:
 
 @router.post("/initial/{session_id}")
 async def initial_grade(session_id: str,
-                         shell_a: UploadFile = File(...),
-                         shell_b: UploadFile = File(...)):
+                        shell_a: UploadFile = File(...),
+                        shell_b: UploadFile = File(...)):
+
+    # Make sure session row exists in DB before updating it
+    ensure_session_exists(session_id)
+
     # Decode images
     img_a = _read_bgr(shell_a)
     img_b = _read_bgr(shell_b)
 
-    # Run Mask R-CNN with is_shell_photo=True
-    # This applies stricter meat thresholds:
-    #   confidence >= 0.85 AND area >= 2000px
-    # to block nacre false positives while still
-    # detecting genuine broken shell meat
+    # Run Mask R-CNN on both shell photos
     result_a = run_inference(img_a, is_shell_photo=True)
     result_b = run_inference(img_b, is_shell_photo=True)
 
@@ -50,7 +52,7 @@ async def initial_grade(session_id: str,
     vec_s1 = build_stage1_vector(combined)
     result = predict_initial_grade(vec_s1)
 
-    # Upload images to Supabase
+    # Save images to local folder
     shell_a.file.seek(0)
     shell_b.file.seek(0)
     path_a = upload_image(session_id, "shell_a", shell_a.file.read())
@@ -81,8 +83,9 @@ async def initial_grade(session_id: str,
 
 @router.post("/final/{session_id}")
 async def final_grade(session_id: str,
-                       meat: UploadFile = File(...)):
-    # Validate session
+                      meat: UploadFile = File(...)):
+
+    # Validate session — Stage 1 must be complete
     session = get_session(session_id)
     if not session or not session.get("initial_features"):
         raise HTTPException(400, "Complete initial grading first")
@@ -90,28 +93,24 @@ async def final_grade(session_id: str,
     # Decode meat image
     img_meat = _read_bgr(meat)
 
-    # Run Mask R-CNN with is_shell_photo=False
-    # This uses more lenient meat thresholds:
-    #   confidence >= 0.50 AND area >= 500px
-    # since meat is expected and dominant in this photo
+    # Run Mask R-CNN on meat photo
     result_meat = run_inference(img_meat, is_shell_photo=False)
 
-    # ── DEBUG: paste these 3 lines ─────────────────────────────────────────
     print("[DEBUG] meat image class_area:", result_meat["class_area"])
-    combined_debug = session["initial_features"]
-    print("[DEBUG] shell_mm2 from side:", combined_debug["shell_mm2"])
-    # ──────────────────────────────────────────────────────────────────────
 
     # Extract features
-    combined   = session["initial_features"]
-    broken     = is_broken_shell(combined)
+    combined = session["initial_features"]
+    broken   = is_broken_shell(combined)
+
+    print("[DEBUG] shell_mm2 from side:", combined["shell_mm2"])
+
     meat_feats = extract_meat_features(result_meat, combined["shell_mm2"])
     vec_all    = build_all_vector(combined, meat_feats)
 
     # Predict final grade
     result = predict_final_grade(vec_all, broken_shell=broken)
 
-    # Upload meat image
+    # Save meat image to local folder
     meat.file.seek(0)
     path_meat = upload_image(session_id, "meat", meat.file.read())
 

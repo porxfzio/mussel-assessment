@@ -9,41 +9,35 @@ with open(_CONFIG_PATH) as f:
     CONFIG = json.load(f)
 
 # Calibration
-PX_PER_MM   = CONFIG["px_per_mm"]     
-TILE_PX     = CONFIG["tile_px"]         
-TILE_MM     = CONFIG["tile_mm"]         
-PX_PER_MM2  = PX_PER_MM ** 2           
+PX_PER_MM   = CONFIG["px_per_mm"]
+TILE_PX     = CONFIG["tile_px"]
+TILE_MM     = CONFIG["tile_mm"]
+PX_PER_MM2  = PX_PER_MM ** 2
 
-STAGE1_COLS = CONFIG["stage1_cols"]     
-STAGE2_COLS = CONFIG["stage2_cols"]     
-ALL_COLS    = CONFIG["all_cols"]        
+STAGE1_COLS = CONFIG["stage1_cols"]
+STAGE2_COLS = CONFIG["stage2_cols"]
+ALL_COLS    = CONFIG["all_cols"]
 
 # Score threshold for Mask R-CNN
-SCORE_THRESH = CONFIG["score_thresh"]  
+SCORE_THRESH = CONFIG["score_thresh"]
 
 CATEGORIES = CONFIG["categories"]
 
-COLOR_THRESH_AB = CONFIG["color_thresh_AB"]   # 8
-COLOR_THRESH_BC = CONFIG["color_thresh_BC"]   # 17
+# Color thresholds
+COLOR_THRESH_AB = CONFIG["color_thresh_AB"]   # 15.0
+COLOR_THRESH_BC = CONFIG["color_thresh_BC"]   # 30.0
+
+# New single pale cream reference approach
+_calib          = CONFIG["color_calib"]
+PALE_CREAM_REF  = np.array(_calib["pale_cream_lab_cv2"], dtype=np.float32)
+ANCHOR_AB       = _calib["anchor_AB_deltaE"]   # 28.6262
+ANCHOR_BC       = _calib["anchor_BC_deltaE"]   # 33.2418
 
 RATIO_DISPLAY_HIGH   = 68.0
 RATIO_DISPLAY_MEDIUM = 56.0
 
-def _std_lab_to_opencv(lab):
-    L, a, b = lab
-    return np.array([
-        L * 255.0 / 100.0,   # L: 0–100  → 0–255
-        a + 128.0,            # a: -128–127 → 0–255
-        b + 128.0,            # b: -128–127 → 0–255
-    ], dtype=np.float32)
 
-
-_calib = CONFIG["color_calib"]
-GRADE_LAB_REFS = {
-    "A": _std_lab_to_opencv(_calib["grade_A_lab"]), 
-    "B": _std_lab_to_opencv(_calib["grade_B_lab"]), 
-    "C": _std_lab_to_opencv(_calib["grade_C_lab"]),  
-}
+# ── Helper functions ──────────────────────────────────────────────────────────
 
 def px_to_mm2(pixels: float) -> float:
     return round(pixels / PX_PER_MM2, 4)
@@ -53,6 +47,7 @@ def px_to_pct(region_px: float, total_px: float) -> float:
     if total_px == 0:
         return 0.0
     return round((region_px / total_px) * 100, 4)
+
 
 def compute_attach_ratio(bio_attach_px: float, shell_px: float) -> float:
     if shell_px == 0:
@@ -97,12 +92,15 @@ def meat_yield_weight_approx(ratio: float) -> str:
     return "below 20%"
 
 
-def color_deviation_label(raw_dist: float) -> str:
-    if raw_dist <= COLOR_THRESH_AB:
+def color_deviation_label(pct: float) -> str:
+    if pct <= COLOR_THRESH_AB:
         return "Low Color Deviation"
-    elif raw_dist <= COLOR_THRESH_BC:
+    elif pct <= COLOR_THRESH_BC:
         return "Moderate Color Deviation"
     return "High Color Deviation"
+
+
+# ── Dominant Lab color extraction ─────────────────────────────────────────────
 
 def _dominant_lab(meat_pixels_bgr: np.ndarray) -> np.ndarray:
     from sklearn.cluster import MiniBatchKMeans
@@ -139,6 +137,8 @@ def _mean_rgb_hex(meat_pixels_bgr: np.ndarray) -> str:
     return f"#{r:02x}{g:02x}{b:02x}"
 
 
+# ── Color deviation (new pale cream reference approach) ───────────────────────
+
 def color_deviation(meat_pixels_bgr: np.ndarray) -> tuple:
     if meat_pixels_bgr is None or len(meat_pixels_bgr) == 0:
         return 50.0, "C", "Unknown", "#cccccc"
@@ -146,27 +146,36 @@ def color_deviation(meat_pixels_bgr: np.ndarray) -> tuple:
     dominant  = _dominant_lab(meat_pixels_bgr)
     hex_color = _mean_rgb_hex(meat_pixels_bgr)
 
-    dist_A = float(np.linalg.norm(dominant - GRADE_LAB_REFS["A"]))
-    dist_B = float(np.linalg.norm(dominant - GRADE_LAB_REFS["B"]))
-    dist_C = float(np.linalg.norm(dominant - GRADE_LAB_REFS["C"]))
+    # Distance from single pale cream reference
+    # Further from pale cream = worse color = higher deviation
+    dist = float(np.linalg.norm(dominant - PALE_CREAM_REF))
 
     print(f"[color] dominant_lab(opencv):{dominant.round(1)} "
-          f"dist_A:{dist_A:.1f} dist_B:{dist_B:.1f} dist_C:{dist_C:.1f}")
+          f"dist_from_pale_cream:{dist:.1f}")
 
-    # Nearest grade reference determines color grade
-    min_dist    = min(dist_A, dist_B, dist_C)
-    color_grade = "A" if min_dist == dist_A else "B" if min_dist == dist_B else "C"
+    # Normalize to percentage using anchor_BC as the 30% boundary
+    # dist=0       → 0%  (identical to pale cream = perfect color)
+    # dist=ANCHOR_BC → 30% (B/C boundary from real samples)
+    # dist>ANCHOR_BC → >30% (Grade C)
+    percentage = float(np.clip((dist / ANCHOR_BC) * COLOR_THRESH_BC, 0.0, 100.0))
 
-    # Deviation is ALWAYS measured from Grade A — further from A = worse color
-    MAX_DELTA_E = CONFIG.get("color_max_delta_e")
-    percentage  = float(np.clip((dist_A / MAX_DELTA_E) * 100.0, 0.0, 100.0))
+    # Determine color grade based on percentage
+    if percentage <= COLOR_THRESH_AB:
+        color_grade = "A"
+    elif percentage <= COLOR_THRESH_BC:
+        color_grade = "B"
+    else:
+        color_grade = "C"
 
     color_label = color_deviation_label(percentage)
 
-    print(f"[color] → nearest grade:{color_grade}  "
-          f"dist_A:{dist_A:.1f}  %:{percentage:.1f}  label:{color_label}")
+    print(f"[color] → dist:{dist:.1f}  %:{percentage:.1f}  "
+          f"grade:{color_grade}  label:{color_label}")
 
     return percentage, color_grade, color_label, hex_color
+
+
+# ── Feature extraction ────────────────────────────────────────────────────────
 
 def extract_side_features(inference_result: dict) -> dict:
     ca = inference_result["class_area"]
@@ -250,11 +259,14 @@ def extract_meat_features(inference_result: dict, shell_mm2_from_side: float) ->
         "meat_yield_weight_approx":  meat_yield_weight_approx(raw_ratio),
         "flesh_color_grade":         color_grade,
         "flesh_color_label":         color_label,
-        "flesh_color_dev_label":     color_deviation_label(raw_dist),
+        "flesh_color_dev_label":     color_label,
         "flesh_color_hex":           hex_color,
     }
 
     return features
+
+
+# ── Feature vector builders ───────────────────────────────────────────────────
 
 def build_stage1_vector(combined_side_features: dict) -> list:
     return [combined_side_features[c] for c in STAGE1_COLS]
@@ -264,12 +276,15 @@ def build_all_vector(combined_side_features: dict, meat_features: dict) -> list:
     merged = {**combined_side_features, **meat_features}
     return [merged[c] for c in ALL_COLS]
 
+
+# ── Validation ────────────────────────────────────────────────────────────────
+
 def validate_ranges(features: dict) -> list:
     checks = {
         "shell_mm2":        (50,    2000),
         "bio_coverage_pct": (0,     100),
         "meat_shell_ratio": (0,     200),
-        "flesh_color_dev":  (0,     50),
+        "flesh_color_dev":  (0,     100),
         "conf_shell_side":  (0.3,   1.0),
         "conf_meat":        (0.3,   1.0),
     }

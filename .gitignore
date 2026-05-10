@@ -49,5 +49,5 @@ ehthumbs.db
 Desktop.ini
 
 # ── Uploads / temp files ──────────────────────────────────────
-backend/uploads/
+backend/uploaded_images/
 *.log

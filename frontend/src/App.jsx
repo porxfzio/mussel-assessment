@@ -331,7 +331,7 @@ export default function App() {
                     {finalResult.color_dev_pct}%
                   </p>
                   <p style={{ fontSize: "13px", color: "#888", marginTop: "2px" }}>
-                    CIE DeltaE76: ΔE {finalResult.color_dev_raw} 
+                    ‎  
                   </p>  
                   <p style={{ fontSize: "15px", fontWeight: 700, color: labelColor(isHighColor), marginTop: "5px" }}>
                     {colorDevLbl}

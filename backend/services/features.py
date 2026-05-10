@@ -146,7 +146,6 @@ def color_deviation(meat_pixels_bgr: np.ndarray) -> tuple:
     dominant  = _dominant_lab(meat_pixels_bgr)
     hex_color = _mean_rgb_hex(meat_pixels_bgr)
 
-    # Compute DeltaE76 to each grade reference (all in OpenCV Lab scale)
     dist_A = float(np.linalg.norm(dominant - GRADE_LAB_REFS["A"]))
     dist_B = float(np.linalg.norm(dominant - GRADE_LAB_REFS["B"]))
     dist_C = float(np.linalg.norm(dominant - GRADE_LAB_REFS["C"]))
@@ -157,13 +156,17 @@ def color_deviation(meat_pixels_bgr: np.ndarray) -> tuple:
     # Nearest grade reference determines color grade
     min_dist    = min(dist_A, dist_B, dist_C)
     color_grade = "A" if min_dist == dist_A else "B" if min_dist == dist_B else "C"
-    raw_dist    = min_dist
-    color_label = color_deviation_label(raw_dist)
+
+    # Deviation is ALWAYS measured from Grade A — further from A = worse color
+    MAX_DELTA_E = CONFIG.get("color_max_delta_e")
+    percentage  = float(np.clip((dist_A / MAX_DELTA_E) * 100.0, 0.0, 100.0))
+
+    color_label = color_deviation_label(percentage)
 
     print(f"[color] → nearest grade:{color_grade}  "
-          f"ΔE:{raw_dist:.1f}  label:{color_label}")
+          f"dist_A:{dist_A:.1f}  %:{percentage:.1f}  label:{color_label}")
 
-    return raw_dist, color_grade, color_label, hex_color
+    return percentage, color_grade, color_label, hex_color
 
 def extract_side_features(inference_result: dict) -> dict:
     ca = inference_result["class_area"]

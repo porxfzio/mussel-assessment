@@ -313,11 +313,11 @@ export default function App() {
                   <p style={{ fontSize: "20px", fontWeight: 700, color: "#2c2c2a", fontVariantNumeric: "tabular-nums" }}>
                     {meatRatio.toFixed(1)}%
                   </p>
+                  <p style={{ fontSize: "13px", color: "#999", marginTop: "4px", fontStyle: "italic" }}>
+                    est. real yield ≈ {weightApprox}
+                  </p>
                   <p style={{ fontSize: "15px", fontWeight: 700, color: labelColor(isLowYield), marginTop: "5px" }}>
                     {yieldLabel}
-                  </p>
-                  <p style={{ fontSize: "10px", color: "#999", marginTop: "4px", fontStyle: "italic" }}>
-                    est. real yield ≈ {weightApprox}
                   </p>
                 </div>
 
@@ -325,11 +325,14 @@ export default function App() {
                 <div style={{ padding: "14px 16px", textAlign: "center", borderRight: "0.5px solid #d3d1c7", background: "#faf9f7" }}>
                   <p style={{ fontSize: "13px", color: "#555", marginBottom: "6px", fontWeight: 700 }}>Color Deviation</p>
                   <p style={{ fontSize: "9px", color: "#aaa", marginBottom: "6px", fontStyle: "italic" }}>
-                    ‎
+                    CIE DeltaE76
                   </p>
-                  <p style={{ fontSize: "20px", fontWeight: 700, color: "#2c2c2a", fontVariantNumeric: "tabular-nums" }}>
-                    {colorDev.toFixed(1)}%
+                  <p style={{ fontSize: "20px", fontWeight: 700 }}>
+                    ΔE {finalResult.color_dev_raw}
                   </p>
+                  <p style={{ fontSize: "13px", color: "#888", marginTop: "2px" }}>
+                    {finalResult.color_dev_pct}% (approx.)
+                  </p>  
                   <p style={{ fontSize: "15px", fontWeight: 700, color: labelColor(isHighColor), marginTop: "5px" }}>
                     {colorDevLbl}
                   </p>

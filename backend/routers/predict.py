@@ -31,34 +31,27 @@ async def initial_grade(session_id: str,
                         shell_a: UploadFile = File(...),
                         shell_b: UploadFile = File(...)):
 
-    # Make sure session row exists in DB before updating it
     ensure_session_exists(session_id)
 
-    # Decode images
     img_a = _read_bgr(shell_a)
     img_b = _read_bgr(shell_b)
 
-    # Run Mask R-CNN on both shell photos
     result_a = run_inference(img_a, is_shell_photo=True)
     result_b = run_inference(img_b, is_shell_photo=True)
 
-    # Extract and combine features
     feat_a   = extract_side_features(result_a)
     feat_b   = extract_side_features(result_b)
     combined = average_side_features(feat_a, feat_b)
     broken   = is_broken_shell(combined)
 
-    # Predict initial grade
     vec_s1 = build_stage1_vector(combined)
     result = predict_initial_grade(vec_s1)
 
-    # Save images to local folder
     shell_a.file.seek(0)
     shell_b.file.seek(0)
     path_a = upload_image(session_id, "shell_a", shell_a.file.read())
     path_b = upload_image(session_id, "shell_b", shell_b.file.read())
 
-    # Persist to DB
     update_session(session_id, {
         "stage":            2,
         "shell_a_path":     path_a,
@@ -85,20 +78,16 @@ async def initial_grade(session_id: str,
 async def final_grade(session_id: str,
                       meat: UploadFile = File(...)):
 
-    # Validate session — Stage 1 must be complete
     session = get_session(session_id)
     if not session or not session.get("initial_features"):
         raise HTTPException(400, "Complete initial grading first")
 
-    # Decode meat image
     img_meat = _read_bgr(meat)
 
-    # Run Mask R-CNN on meat photo
     result_meat = run_inference(img_meat, is_shell_photo=False)
 
     print("[DEBUG] meat image class_area:", result_meat["class_area"])
 
-    # Extract features
     combined = session["initial_features"]
     broken   = is_broken_shell(combined)
 
@@ -107,14 +96,11 @@ async def final_grade(session_id: str,
     meat_feats = extract_meat_features(result_meat, combined["shell_mm2"])
     vec_all    = build_all_vector(combined, meat_feats)
 
-    # Predict final grade
     result = predict_final_grade(vec_all, broken_shell=broken)
 
-    # Save meat image to local folder
     meat.file.seek(0)
     path_meat = upload_image(session_id, "meat", meat.file.read())
 
-    # Persist to DB
     update_session(session_id, {
         "stage":          4,
         "meat_path":      path_meat,
@@ -123,10 +109,13 @@ async def final_grade(session_id: str,
     })
 
     return {
-        "grade":                 result["grade"],
-        "rf_grade":              result["rf_grade"],
-        "broken_shell_override": result["broken_shell_override"],
-        "probabilities":         result["probabilities"],
+        "grade":                 result["grade"],               # ← fixed
+        "rf_grade":              result["rf_grade"],            # ← fixed
+        "broken_shell_override": result["broken_shell_override"], # ← fixed
+        "probabilities":         result["probabilities"],       # ← fixed
         "features":              {**combined, **meat_feats},
         "overlay_meat":          result_meat["overlay_b64"],
+        "color_dev_pct":   round(meat_feats["flesh_color_dev"], 1),        # already %
+        "color_dev_raw":   round(meat_feats["flesh_color_dev"] * 93.3 / 100, 1),  # reverse to DeltaE
+        "color_dev_label": meat_feats["flesh_color_dev_label"],
     }

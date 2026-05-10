@@ -116,6 +116,6 @@ async def final_grade(session_id: str,
         "features":              {**combined, **meat_feats},
         "overlay_meat":          result_meat["overlay_b64"],
         "color_dev_pct":   round(meat_feats["flesh_color_dev"], 1),        # already %
-        "color_dev_raw":   round(meat_feats["flesh_color_dev"] * 93.3 / 100, 1),  # reverse to DeltaE
+        "color_dev_raw":   round(meat_feats["flesh_color_dev"] * 100 / 100, 1),  # reverse to DeltaE
         "color_dev_label": meat_feats["flesh_color_dev_label"],
     }

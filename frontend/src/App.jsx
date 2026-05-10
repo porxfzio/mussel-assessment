@@ -330,9 +330,6 @@ export default function App() {
                   <p style={{ fontSize: "20px", fontWeight: 700 }}>
                     {finalResult.color_dev_pct}%
                   </p>
-                  <p style={{ fontSize: "13px", color: "#888", marginTop: "2px" }}>
-                    ‎  
-                  </p>  
                   <p style={{ fontSize: "15px", fontWeight: 700, color: labelColor(isHighColor), marginTop: "5px" }}>
                     {colorDevLbl}
                   </p>

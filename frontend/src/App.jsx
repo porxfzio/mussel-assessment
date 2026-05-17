@@ -1,5 +1,6 @@
 import { useState } from "react";
 import "./style.css";
+import ConveyorMode from "./ConveyorMode";
 
 const API_BASE = import.meta.env.VITE_API_URL || "http://localhost:8000";
 
@@ -51,6 +52,7 @@ export default function App() {
   const [finalResult, setFinalResult] = useState(null);
   const [loadingInitial, setLoadingInitial] = useState(false);
   const [loadingFinal, setLoadingFinal] = useState(false);
+  const [conveyorMode, setConveyorMode] = useState(false);
 
   async function getInitialGrade() {
     const form = new FormData();
@@ -88,6 +90,11 @@ export default function App() {
   const getGradeClass = (g) => g === "A" ? "gc-a" : g === "B" ? "gc-b" : "gc-c";
   const getBadgeClass = (g) => g === "A" ? "gb-a" : g === "B" ? "gb-b" : "gb-c";
 
+  // Add this right at the top of your return, before <div className="app">
+  if (conveyorMode) {
+    return <ConveyorMode onBack={() => setConveyorMode(false)} />;
+  }
+
   return (
     <div className="app">
 
@@ -99,7 +106,26 @@ export default function App() {
           Upload shell exterior photos for an initial grade based on biofouling,
           then upload the opened mussel photo for the final grade.
         </p>
+
+        {/* Conveyor belt mode button — top right */}
+        <button
+          onClick={() => setConveyorMode(true)}
+          style={{
+            position: "absolute",
+            top: 0, right: 0,
+            display: "flex", alignItems: "center", gap: 6,
+            background: "#0F6E56", color: "#E1F5EE",
+            border: "none", borderRadius: 8,
+            padding: "9px 16px", fontSize: 12,
+            fontWeight: 600, cursor: "pointer",
+            fontFamily: "inherit",
+          }}
+        >
+          🎥 Conveyor Belt Mode
+        </button>
       </div>
+
+
 
       {/* ── STEPPER ── */}
       <div className="stepper">
